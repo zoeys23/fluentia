@@ -1,18 +1,28 @@
 /**
  * Session ID management.
  *
- * Every user gets a single persistent UUID stored in localStorage.
- * It ties onboarding, plan, voice sessions, and summaries together.
+ * user_id: persistent UUID (ties onboarding, plan, memory together)
+ * session_id: unique per practice session (new UUID each time)
  */
 
-export function getSessionId(): string {
+export function getUserId(): string {
   if (typeof window === "undefined") return "";
-  let id = localStorage.getItem("session_id");
+  let id = localStorage.getItem("user_id");
   if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem("session_id", id);
+    // Migrate from legacy single-ID scheme
+    id = localStorage.getItem("session_id") ?? crypto.randomUUID();
+    localStorage.setItem("user_id", id);
   }
   return id;
+}
+
+/** @deprecated Use getUserId() for user identity, createSessionId() for new sessions */
+export function getSessionId(): string {
+  return getUserId();
+}
+
+export function createSessionId(): string {
+  return crypto.randomUUID();
 }
 
 export function getCurrentDay(): { week: number; day: number } {

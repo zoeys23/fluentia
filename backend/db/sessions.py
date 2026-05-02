@@ -17,16 +17,17 @@ def _now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
-async def get_or_create(session_id: str) -> dict:
+async def get_or_create(session_id: str, user_id: str = "") -> dict:
     """Upsert and return the session document."""
     db = await get_db()
     now = _now()
+    uid = user_id or session_id
     result = await db.sessions.find_one_and_update(
         {"session_id": session_id},
         {
             "$setOnInsert": {
                 "session_id": session_id,
-                "user_id": session_id,
+                "user_id": uid,
                 "utterances": [],
                 "onboarding_messages": [],
                 "plan": None,
@@ -46,9 +47,10 @@ async def get(session_id: str) -> Optional[dict]:
     return await db.sessions.find_one({"session_id": session_id})
 
 
-async def append_utterance(session_id: str, speaker: str, text: str) -> None:
+async def append_utterance(session_id: str, speaker: str, text: str, user_id: str = "") -> None:
     """Push an utterance onto the session's utterances array."""
     db = await get_db()
+    uid = user_id or session_id
     await db.sessions.update_one(
         {"session_id": session_id},
         {
@@ -61,7 +63,7 @@ async def append_utterance(session_id: str, speaker: str, text: str) -> None:
             },
             "$setOnInsert": {
                 "session_id": session_id,
-                "user_id": session_id,
+                "user_id": uid,
                 "onboarding_messages": [],
                 "plan": None,
                 "summary": None,

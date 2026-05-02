@@ -75,16 +75,20 @@ def _build_system_prompt(session: dict | None, week: int, day: int, memory: str 
 @router.get("/api/token")
 async def get_token(
     session_id: str = Query(...),
+    user_id: str = Query(default=""),
     week: int = Query(default=1, ge=1, le=2),
     day: int = Query(default=1, ge=1, le=7),
 ):
     """Return API key + session config for a direct browser → Gemini Live connection."""
-    await sessions.get_or_create(session_id)
+    uid = user_id or session_id
+    await sessions.get_or_create(session_id, user_id=uid)
 
-    # session_id doubles as user_id (no auth layer for hackathon)
-    memory = await build_memory_context(session_id)
+    memory = await build_memory_context(uid)
+    # Plan lives on the user's primary document (session_id == user_id)
+    user_doc = await sessions.get(uid)
     session = await sessions.get(session_id)
-    system_prompt = _build_system_prompt(session, week, day, memory)
+    plan_source = session if session and session.get("plan") else user_doc
+    system_prompt = _build_system_prompt(plan_source, week, day, memory)
     logger.debug(f"Token system prompt for {session_id} w{week}d{day}:\n{system_prompt}")
 
     return {

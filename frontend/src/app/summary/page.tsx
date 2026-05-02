@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { applyRecommendations, type SessionSummary } from "@/lib/api";
-import { getSessionId } from "@/lib/session";
+import { getUserId } from "@/lib/session";
 
 function RatingDots({ value, max = 5 }: { value: number; max?: number }) {
   return (
@@ -47,14 +47,15 @@ export default function SummaryPage() {
         if (parsed.key_phrases?.length) {
           const existing: Array<{ phrase: string; translation: string; topic: string; times_seen: number }> =
             JSON.parse(localStorage.getItem("learned_phrases") ?? "[]");
-          const byPhrase = new Map(existing.map((e) => [e.phrase, e]));
+          const byPhrase = new Map(existing.map((e) => [e.phrase.normalize("NFC").trim(), e]));
 
           for (const kp of parsed.key_phrases) {
-            const prev = byPhrase.get(kp.target);
+            const key = kp.target.normalize("NFC").trim();
+            const prev = byPhrase.get(key);
             if (prev) {
               prev.times_seen = (prev.times_seen || 1) + 1;
             } else {
-              byPhrase.set(kp.target, {
+              byPhrase.set(key, {
                 phrase: kp.target,
                 translation: kp.native,
                 topic: parsed.session_meta.day_title || "Session",
@@ -77,7 +78,8 @@ export default function SummaryPage() {
     if (applying) return;
     setApplying(true);
     try {
-      await applyRecommendations(getSessionId());
+      const practiceSessionId = localStorage.getItem("last_session_id") ?? getUserId();
+      await applyRecommendations(practiceSessionId);
       localStorage.removeItem("last_summary");
       router.push("/plan");
     } catch (err) {

@@ -13,7 +13,7 @@ Fluencia is a real-time AI language tutor with persistent memory, built for the 
 │  GeminiWsClient ──────── ephemeral token ──────▶ Gemini Live WS │
 │  MediaHandler  (PCM 16kHz ↑ / PCM 24kHz ↓)                     │
 │  api.ts        ──── REST ──────────────────────▶ FastAPI         │
-│  localStorage  (session_id UUID = user_id stub)                  │
+│  localStorage  (user_id UUID persistent + session_id per-practice)│
 └──────────────────────────────────────────────────────────────────┘
                               │
                     ┌─────────▼─────────┐
@@ -46,7 +46,7 @@ Fluencia is a real-time AI language tutor with persistent memory, built for the 
 | Live voice link | `GeminiWsClient` (`lib/gemini-ws.ts`) | Direct browser → Gemini Live WebSocket using an ephemeral token minted by the backend |
 | REST client | `lib/api.ts` | Typed wrappers for all 7 backend endpoints |
 | UI components | shadcn/ui + Tailwind v4 | Chat bubbles, speed slider, VAD mic button, plan cards |
-| State | React local state + `localStorage` | `session_id` (UUID) persisted in localStorage and doubled as `user_id`; plan + summary in component state |
+| State | React local state + `localStorage` | `user_id` (persistent UUID) for identity; `session_id` (new UUID per practice) for session isolation; plan + summary in component state |
 
 **Key data flow — voice session:**
 
@@ -81,7 +81,7 @@ Mic → AudioWorklet (PCM 16kHz) → GeminiWsClient.sendAudio()
 | | `POST /api/session/{id}/end` | Trigger post-session summary generation |
 | | `POST /api/session/{id}/apply-recommendations` | Rewrite the plan from the summary's `plan_recommendation` |
 | | `GET /api/session/{id}/export` | Return full transcript + summary as JSON |
-| `token.py` | `GET /api/token` | Mint a short-lived (30 min, 1-use) Gemini ephemeral token; build and attach the day's system prompt |
+| `token.py` | `GET /api/token` | Mint a short-lived (30 min, 1-use) Gemini ephemeral token; accepts `session_id` + `user_id`; builds day's system prompt with memory context from user's primary doc |
 
 #### Services
 
@@ -91,11 +91,11 @@ Mic → AudioWorklet (PCM 16kHz) → GeminiWsClient.sendAudio()
 | Summary agent | `services/summary_agent.py` | Post-session analysis → structured JSON (tutor note, key phrases, performance, plan recommendations) |
 | Memory | `services/memory.py` | Builds the memory context block injected into the live tutor system prompt (**stub — MongoDB implementation target**) |
 
-#### Session Store — `session_store.py`
+#### Session Store — `db/sessions.py`
 
-**Current:** In-memory Python dict (`_store: dict[str, SessionData]`). Holds utterances, onboarding messages, plan, and summary per `session_id`.
+MongoDB-backed session store. Each practice session creates a new document with a unique `session_id` and a shared `user_id`. The user's primary document (where `session_id == user_id`) holds onboarding messages and the learning plan. Practice session documents hold utterances and summaries.
 
-**Hackathon target:** Replace with MongoDB `sessions` collection + TTL index for auto-pruning.
+**Identity model:** `user_id` (persistent, from localStorage) identifies the user across sessions. `session_id` (unique per practice) isolates each conversation. `list_by_user(user_id)` returns all practice sessions for a user.
 
 ---
 
@@ -138,8 +138,9 @@ This is the core differentiator for the hackathon: an **evolutionary memory laye
 
 - Stores raw session data (utterances, plan snapshot, summary) during and immediately after each session
 - TTL index on `created_at` (`expireAfterSeconds: 2592000` = 30 days) auto-prunes stale records
-- Replaces the current in-memory `session_store.py` dict
-- `session_id` maps 1:1 to a document
+- `session_id` maps 1:1 to a document; `user_id` index enables listing all sessions per user
+- **User's primary doc** (`session_id == user_id`): holds onboarding messages and learning plan
+- **Practice session docs** (`session_id != user_id`): hold utterances and per-session summaries
 
 ### Long-term: `memories` collection
 
@@ -215,7 +216,7 @@ This satisfies the PRD requirement: *"Fluencia references a specific past moment
 }
 ```
 
-**`users`** (MongoDB-managed; `user_id` = `session_id` UUID from localStorage)
+**`users`** (MongoDB-managed; `user_id` = persistent UUID from localStorage)
 ```json
 {
   "_id": "ObjectId",
@@ -238,7 +239,7 @@ This satisfies the PRD requirement: *"Fluencia references a specific past moment
 POST  /api/onboarding/{session_id}/message      Onboarding chat turn
 GET   /api/plan/{session_id}                    Fetch current plan
 POST  /api/plan/{session_id}/suggest            Add/adjust topic
-GET   /api/token?session_id=&week=&day=         Mint ephemeral Gemini token
+GET   /api/token?session_id=&user_id=&week=&day= Mint ephemeral Gemini token
 POST  /api/session/{session_id}/utterances      Ingest transcription event
 POST  /api/session/{session_id}/end             Generate session summary
 POST  /api/session/{session_id}/apply-recommendations  Rewrite plan from summary
@@ -316,12 +317,12 @@ NEXT_PUBLIC_BACKEND_URL=http://localhost:8000  # or https://your-ec2-domain
 
 ### Phase 2 — MongoDB memory layer (hackathon target)
 
-- [ ] Provision MongoDB Atlas 8.0+ cluster; run `db/indexes.ts` to create collections and vector/search indexes
-- [ ] Replace `session_store.py` dict with MongoDB `sessions` collection + TTL index
-- [ ] Implement Reflection Node in `services/memory.py`: post-session distillation → upsert into `memories`
-- [ ] Implement `build_memory_context()`: hybrid `$rankFusion` search → formatted system prompt block
-- [ ] Use `session_id` UUID (from `localStorage`) as `user_id` stub — no auth wall needed for the demo
-- [ ] Add `VOYAGE_API_KEY` and `MONGODB_URI` to backend env; install `pymongo` + `voyageai`
+- [x] Provision MongoDB Atlas 8.0+ cluster; run `db/indexes.py` to create collections and vector/search indexes
+- [x] Replace `session_store.py` dict with MongoDB `sessions` collection + TTL index
+- [x] Implement Reflection Node in `services/reflection.py`: post-session distillation → upsert into `memories`
+- [x] Implement `build_memory_context()`: tiered priority retrieval → formatted system prompt block
+- [x] Split identity: `user_id` (persistent UUID from localStorage) vs `session_id` (new per practice). Enables multi-session history per user
+- [x] Add `VOYAGE_API_KEY` and `MONGODB_URI` to backend env; install `pymongo` + `voyageai`
 
 ### Phase 3 — Polish
 
@@ -337,14 +338,26 @@ NEXT_PUBLIC_BACKEND_URL=http://localhost:8000  # or https://your-ec2-domain
 **Why direct browser → Gemini Live (not proxied)?**
 Proxying audio through the backend adds ~100ms round-trip latency. The ephemeral token pattern (1-use, 30-min TTL, minted server-side) preserves API key security while keeping the hot audio path zero-hop.
 
-**Why in-memory session store for now?**
-The voice session is stateless from MongoDB's perspective — all audio processing happens in Gemini. Only the transcript (text) needs persistence, and it's small. The in-memory store is adequate for single-instance development; MongoDB replaces it in Phase 2 for multi-instance production and TTL-based pruning.
+**Why split `user_id` and `session_id`?**
+A persistent `user_id` (stored once in localStorage) ties together onboarding, plan, memory, and session history. A unique `session_id` per practice session gives each conversation its own MongoDB document — enabling session history, independent summaries, and TTL-based pruning without losing user continuity. The user's primary document (`session_id == user_id`) holds the plan and onboarding state; practice documents hold utterances and summaries.
+
+**Why store the plan on the user's primary document?**
+There's exactly one active plan per user. Storing it on the primary doc (`session_id == user_id`) avoids duplicating it across every practice session. The token endpoint and plan agent look it up by `user_id`, while practice sessions reference it read-only for system prompt construction.
 
 **Why `$rankFusion` over pure vector search?**
 Short memory slots like `"name: Pavel"` or `"goal: trip to Madrid in 3 months"` are too short for embeddings alone to be reliable. The lexical branch catches exact memory_type matches that the vector branch would rank lower. Weighted fusion (0.7/0.3) keeps semantic recall dominant.
 
+**Why tiered memory with a 12-line cap?**
+The tutor system prompt has a limited attention budget. Priority tiers ensure practice focus directives (what to drill vs. skip) always appear, while lower-priority history only fills remaining slots. 12 lines × ~30 tokens = ~360 tokens — well within budget without diluting tutor focus.
+
 **Why Gemini for both planning and voice?**
 Single provider simplifies auth (one API key, one ephemeral token flow). `gemini-3.1-flash-lite-preview` handles structured JSON tasks cheaply; `gemini-3.1-flash-live-preview` handles real-time audio. The system prompt injection pattern (`session_brief`) is the same for both.
 
+**Why archive vocabulary instead of deleting it?**
+Phrases practiced 3+ times are moved from `memories` to `memories_archive`. They no longer appear in the tutor prompt (avoiding stale drilling), but remain queryable for progress tracking, export, and "what have I learned?" features. The archive is cold storage — never injected into prompts.
+
 **Why no Supabase auth for the hackathon?**
-Supabase auth is invisible to judges and adds ~1 day of frontend/backend plumbing plus demo-day friction (magic link email delays). The frontend already persists a `session_id` UUID in `localStorage`; this doubles as a stable `user_id` for all MongoDB memory operations. Real auth can be layered on post-hackathon without touching the memory layer — `user_id` is just a string key.
+Supabase auth is invisible to judges and adds ~1 day of frontend/backend plumbing plus demo-day friction (magic link email delays). The frontend persists a `user_id` UUID in `localStorage` as stable identity for all MongoDB memory operations. Each practice session gets a unique `session_id` for isolation. Real auth can be layered on post-hackathon without touching the memory layer — `user_id` is just a string key.
+
+**Why NFC normalization for phrase deduplication?**
+Gemini transcription can produce accented characters in different Unicode forms (composed `é` vs. decomposed `e` + combining accent). Normalizing to NFC before Map lookup prevents visually identical phrases from appearing as duplicates in the learnings list. Applied at both write time (summary page) and read time (learnings page, which also self-heals corrupted localStorage).

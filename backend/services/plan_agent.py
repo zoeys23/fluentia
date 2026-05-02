@@ -155,12 +155,19 @@ Pure JSON, no markdown fences."""
 async def apply_recommendations(session_id: str, api_key: str) -> dict:
     """Apply the session summary's plan_recommendation to update the plan."""
     session = await sessions.get(session_id)
-    if not session or not session.get("plan"):
+    if not session:
+        return {"error": "Session not found"}
+
+    user_id = session.get("user_id", session_id)
+    # Plan lives on the user's primary document; summary on the practice session
+    user_doc = await sessions.get(user_id) if user_id != session_id else session
+    plan_source = session if session.get("plan") else user_doc
+    if not plan_source or not plan_source.get("plan"):
         return {"error": "No plan found for this session"}
     if not session.get("summary"):
         return {"error": "No summary found — call /end first"}
 
-    plan = session["plan"]
+    plan = plan_source["plan"]
     summary = session["summary"]
     rec = summary.get("plan_recommendation", {})
     performance = summary.get("performance", {})
@@ -213,5 +220,5 @@ Return the FULL updated plan JSON. Pure JSON, no markdown fences."""
         logger.error(f"apply_recommendations JSON parse error: {raw}")
         return {"error": "Could not apply recommendations"}
 
-    await sessions.set_plan(session_id, updated_plan)
+    await sessions.set_plan(user_id, updated_plan)
     return updated_plan

@@ -14,7 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { GeminiWsClient } from "@/lib/gemini-ws";
 import { MediaHandler } from "@/lib/media-handler";
 import { endSession } from "@/lib/api";
-import { advanceDay, getSessionId } from "@/lib/session";
+import { advanceDay, getUserId, createSessionId } from "@/lib/session";
 
 interface Message {
   id: number;
@@ -28,7 +28,8 @@ export default function SessionPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const sessionId = getSessionId();
+  const userId = getUserId();
+  const [sessionId] = useState(() => createSessionId());
   const week = parseInt(searchParams.get("week") ?? "1", 10);
   const day = parseInt(searchParams.get("day") ?? "1", 10);
 
@@ -74,6 +75,7 @@ export default function SessionPage() {
 
     const ws = new GeminiWsClient({
       sessionId,
+      userId,
       week,
       day,
       onOpen: async () => {
@@ -112,7 +114,7 @@ export default function SessionPage() {
 
     wsRef.current = ws;
     await ws.connect();
-  }, [sessionId, week, day, appendMessage]);
+  }, [sessionId, userId, week, day, appendMessage]);
 
   const stopSession = useCallback(() => {
     wsRef.current?.disconnect();
@@ -138,6 +140,7 @@ export default function SessionPage() {
     try {
       const summary = await endSession(sessionId, week, day);
       localStorage.setItem("last_summary", JSON.stringify(summary));
+      localStorage.setItem("last_session_id", sessionId);
       advanceDay(2, 7);
     } catch (err) {
       console.error("End session error:", err);

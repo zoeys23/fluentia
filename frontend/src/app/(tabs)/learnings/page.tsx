@@ -36,8 +36,22 @@ export default function LearningsPage() {
       const raw = localStorage.getItem("learned_phrases");
       if (raw) {
         const parsed: LearnedPhrase[] = JSON.parse(raw);
-        parsed.sort((a, b) => (b.times_seen ?? 1) - (a.times_seen ?? 1));
-        setLearned(parsed);
+        const deduped = new Map<string, LearnedPhrase>();
+        for (const p of parsed) {
+          const key = p.phrase.normalize("NFC").trim();
+          const existing = deduped.get(key);
+          if (existing) {
+            existing.times_seen = Math.max(existing.times_seen ?? 1, p.times_seen ?? 1);
+          } else {
+            deduped.set(key, p);
+          }
+        }
+        const unique = [...deduped.values()];
+        unique.sort((a, b) => (b.times_seen ?? 1) - (a.times_seen ?? 1));
+        setLearned(unique);
+        if (unique.length < parsed.length) {
+          localStorage.setItem("learned_phrases", JSON.stringify(unique));
+        }
       }
     } catch {
       // ignore corrupt data

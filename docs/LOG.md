@@ -93,7 +93,7 @@ python main.py
 
 ## Key decisions
 
-- **`session_id` = `user_id`** — no auth layer; localStorage UUID doubles as identity key
+- **`user_id` (persistent) vs `session_id` (per-practice)** — localStorage stores a permanent UUID as user identity; each voice session creates a new unique session_id. The `sessions` collection stores both, enabling multi-session history per user
 - **`tenant_id` = "fluencia"** hard-coded — simplifies all memory calls (no caller needs to pass it)
 - **Reflection uses typed memory_type prefixes** (e.g., `vocabulary_mastered:hola`) — allows upsert-on-exact-match while keeping `search_memory` semantic
 - **TTL 30 days on sessions** — auto-prunes old session documents; long-term memories persist indefinitely
@@ -254,3 +254,55 @@ memories_archive (cold storage — queryable but never in prompt):
 - **Archive, don't delete** — graduated vocabulary can still be queried for progress tracking, export, or "what did I learn?" features without polluting the active prompt
 - **Weekly digest only on day 7** — avoids partial-week summaries; if user skips days, notes accumulate until the week actually ends
 - **Compaction is non-blocking** — failures are logged but don't break the session end response
+
+---
+
+## Phase 2d — Multi-Session Identity & Learnings Dedup Fix
+
+**Date:** 2026-05-02
+
+### Problem
+
+1. **Sessions page only showed the latest session.** The app used a single persistent UUID as both `user_id` and `session_id`. Every practice session wrote to the same MongoDB document — utterances accumulated, summaries were overwritten. The `list_by_user()` query correctly filtered by `user_id`, but only one document ever matched.
+
+2. **Duplicate phrases in Learnings.** The `learned_phrases` localStorage array contained visually identical entries (e.g. "¿Qué tal?" appearing twice), likely due to Unicode normalization mismatches (composed vs decomposed accented characters).
+
+### What changed
+
+#### Identity split: `user_id` (persistent) vs `session_id` (per-practice)
+
+| File | Change |
+|------|--------|
+| `frontend/src/lib/session.ts` | Added `getUserId()` (persistent localStorage UUID, with migration from legacy `session_id` key) and `createSessionId()` (new UUID per session). Kept `getSessionId()` as deprecated shim → `getUserId()` |
+| `frontend/src/app/(tabs)/sessions/[id]/page.tsx` | Generates a new `sessionId` via `createSessionId()` on mount. Passes both `userId` and `sessionId` to the WS client. Stores `last_session_id` in localStorage for the summary page |
+| `frontend/src/app/(tabs)/sessions/page.tsx` | Uses `getUserId()` for listing sessions |
+| `frontend/src/app/summary/page.tsx` | Uses `getUserId()` for user identity; reads `last_session_id` for `applyRecommendations()` |
+| `frontend/src/lib/gemini-ws.ts` | Added `userId` to config; passes `user_id` query param to `/api/token` |
+| `backend/routers/token.py` | Accepts `user_id` query param; passes it to `get_or_create()`. Looks up plan from user's primary doc (where `session_id == user_id`) |
+| `backend/routers/session.py` | `end_session` reads `user_id` from session document for reflection/compaction instead of assuming `session_id == user_id` |
+| `backend/db/sessions.py` | `get_or_create()` and `append_utterance()` accept optional `user_id` param (defaults to `session_id` for backward compat) |
+| `backend/services/plan_agent.py` | `apply_recommendations()` reads plan from user's primary doc, summary from practice session doc; writes updated plan back to user's primary doc |
+
+#### Learnings deduplication fix
+
+| File | Change |
+|------|--------|
+| `frontend/src/app/(tabs)/learnings/page.tsx` | Deduplicates on read using NFC normalization + trim. Self-heals localStorage if duplicates found |
+| `frontend/src/app/summary/page.tsx` | Normalizes dedup key with `.normalize("NFC").trim()` before Map lookup |
+
+### Data model (after change)
+
+```
+MongoDB sessions collection:
+  doc1: { session_id: "abc-user-uuid", user_id: "abc-user-uuid", plan: {...}, utterances: [] }  ← user's primary doc (onboarding/plan)
+  doc2: { session_id: "def-practice-1", user_id: "abc-user-uuid", utterances: [...], summary: {...} }  ← practice session 1
+  doc3: { session_id: "ghi-practice-2", user_id: "abc-user-uuid", utterances: [...], summary: {...} }  ← practice session 2
+
+list_by_user("abc-user-uuid") → returns doc2, doc3 (doc1 excluded by utterances.0 filter since it has no utterances)
+```
+
+### Key decisions
+
+- **Backward compatible** — `getSessionId()` still works (delegates to `getUserId()`); old localStorage keys are migrated on first call
+- **Plan stays on user's primary doc** — only one plan per user; practice sessions reference it but don't duplicate it
+- **NFC normalization for dedup** — handles accented characters that may arrive in different Unicode forms from Gemini transcription

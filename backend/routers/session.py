@@ -62,6 +62,9 @@ async def end_session(
     day: int = Query(default=1, ge=1, le=7),
 ):
     """Trigger summary generation, run reflection, and return the summary."""
+    session_doc = await sessions.get(session_id)
+    user_id = session_doc.get("user_id", session_id) if session_doc else session_id
+
     result = await summary_agent.generate_summary(
         session_id=session_id,
         api_key=GEMINI_API_KEY,
@@ -73,13 +76,13 @@ async def end_session(
 
     # Reflection: distill summary into long-term memory slots
     try:
-        await reflect(session_id=session_id, user_id=session_id, summary=result)
+        await reflect(session_id=session_id, user_id=user_id, summary=result)
     except Exception as e:
         logger.error(f"Reflection failed for {session_id}: {e}")
 
     # Compaction: graduate grasped phrases, build weekly digest on day 7
     try:
-        await run_compaction(user_id=session_id, week=week, day=day)
+        await run_compaction(user_id=user_id, week=week, day=day)
     except Exception as e:
         logger.error(f"Compaction failed for {session_id}: {e}")
 

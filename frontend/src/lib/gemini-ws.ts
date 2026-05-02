@@ -11,6 +11,7 @@ export type WsEvent =
 
 interface GeminiWsConfig {
   sessionId: string;
+  userId: string;
   week?: number;
   day?: number;
   onOpen?: () => void;
@@ -61,7 +62,7 @@ export class GeminiWsClient {
     let tokenData: TokenResponse;
     try {
       const res = await fetch(
-        `${BACKEND}/api/token?session_id=${this.config.sessionId}&week=${week}&day=${day}`
+        `${BACKEND}/api/token?session_id=${this.config.sessionId}&user_id=${this.config.userId}&week=${week}&day=${day}`
       );
       if (!res.ok) throw new Error(`Token fetch failed: ${res.status}`);
       tokenData = await res.json();

@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, MessageSquare, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getSessionId } from "@/lib/session";
+import { getUserId } from "@/lib/session";
 import { getSessions, type SessionListItem } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,9 +26,9 @@ export default function SessionsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const userId = getSessionId();
-    if (!userId) return;
-    getSessions(userId)
+    const uid = getUserId();
+    if (!uid) return;
+    getSessions(uid)
       .then(setSessions)
       .catch((err) => console.error("Failed to load sessions:", err))
       .finally(() => setLoading(false));
@@ -43,7 +43,7 @@ export default function SessionsPage() {
             <h2 className="text-2xl font-heading font-bold">Sessions</h2>
             <p className="text-muted-foreground text-sm mt-0.5">Your conversation history with Fluencia</p>
           </div>
-          <Button size="sm" className="gap-1.5" onClick={() => router.push(`/sessions/${getSessionId()}`)}>
+          <Button size="sm" className="gap-1.5" onClick={() => router.push(`/sessions/new`)}>
             <Plus className="h-4 w-4" />
             New
           </Button>
