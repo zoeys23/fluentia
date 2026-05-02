@@ -125,8 +125,6 @@ export class GeminiWsClient {
       // Setup complete — signal onOpen now (after handshake, not on WS open)
       if (data.setupComplete !== undefined) {
         this.config.onOpen?.();
-        // Prompt the tutor to speak first
-        this.sendText("Hello! Please greet me and start today's lesson.");
         return;
       }
 
