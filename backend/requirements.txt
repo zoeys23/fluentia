@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+google-genai
+python-dotenv
+python-multipart
+pymongo>=4.13
+voyageai>=0.3.7
