@@ -26,7 +26,7 @@ async def create_indexes():
     db = await get_db()
 
     existing = set(await db.list_collection_names())
-    for name in ["users", "sessions", "memories"]:
+    for name in ["users", "sessions", "memories", "memories_archive"]:
         if name not in existing:
             await db.create_collection(name)
             print(f"{name}: collection created")
@@ -50,6 +50,14 @@ async def create_indexes():
         name="memories_slot_unique",
     )
     print("memories: (user_id, tenant_id, memory_type) unique index ready")
+
+    # --- memories_archive ---
+    await db.memories_archive.create_index(
+        [("user_id", 1), ("tenant_id", 1), ("memory_type", 1)],
+        name="archive_user_type",
+    )
+    await db.memories_archive.create_index("archived_at")
+    print("memories_archive: user+type and archived_at indexes ready")
 
     # --- Search indexes (vector + text) ---
     vector_index_def = {

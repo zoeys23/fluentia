@@ -1,15 +1,51 @@
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
 from schemas import UtteranceIn
 from services import plan_agent, summary_agent
 from services.reflection import reflect
+from services.compaction import run_compaction
 from settings import GEMINI_API_KEY
 from db import sessions
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.get("/api/sessions/{user_id}")
+async def list_sessions(user_id: str):
+    """Return all sessions for a user (most recent first)."""
+    docs = await sessions.list_by_user(user_id)
+    result = []
+    for doc in docs:
+        summary = doc.get("summary")
+        topic = "Practice Session"
+        duration_min = 0
+        status = "completed"
+        if summary:
+            meta = summary.get("session_meta", {})
+            topic = meta.get("day_title", topic)
+        created_at = doc.get("created_at")
+        last_utterance = doc.get("utterances", [None])[-1] if doc.get("utterances") else None
+        if created_at and last_utterance:
+            try:
+                end_ts = datetime.fromisoformat(last_utterance["timestamp"])
+                start_ts = created_at if isinstance(created_at, datetime) else datetime.fromisoformat(str(created_at))
+                duration_min = max(1, int((end_ts - start_ts).total_seconds() / 60))
+            except (KeyError, ValueError, TypeError):
+                pass
+        if not summary:
+            status = "in-progress"
+        result.append({
+            "id": doc["session_id"],
+            "topic": topic,
+            "created_at": str(created_at) if created_at else "",
+            "duration_min": duration_min,
+            "status": status,
+        })
+    return result
 
 
 @router.post("/api/session/{session_id}/utterances")
@@ -40,6 +76,12 @@ async def end_session(
         await reflect(session_id=session_id, user_id=session_id, summary=result)
     except Exception as e:
         logger.error(f"Reflection failed for {session_id}: {e}")
+
+    # Compaction: graduate grasped phrases, build weekly digest on day 7
+    try:
+        await run_compaction(user_id=session_id, week=week, day=day)
+    except Exception as e:
+        logger.error(f"Compaction failed for {session_id}: {e}")
 
     return result
 

@@ -164,3 +164,21 @@ export async function exportSession(sessionId: string): Promise<SessionExport> {
   if (!res.ok) throw new Error(`Export error: ${res.status}`);
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Sessions List
+// ---------------------------------------------------------------------------
+
+export interface SessionListItem {
+  id: string;
+  topic: string;
+  created_at: string;
+  duration_min: number;
+  status: "completed" | "in-progress";
+}
+
+export async function getSessions(userId: string): Promise<SessionListItem[]> {
+  const res = await fetch(`${BACKEND}/api/sessions/${userId}`);
+  if (!res.ok) throw new Error(`Sessions list error: ${res.status}`);
+  return res.json();
+}

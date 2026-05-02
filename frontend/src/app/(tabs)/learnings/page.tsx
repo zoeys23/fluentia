@@ -7,10 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-type LearnedPhrase = { phrase: string; translation: string; topic: string };
+type LearnedPhrase = { phrase: string; translation: string; topic: string; times_seen?: number };
 
-function toMarkdown(items: typeof learned) {
-  const groups = items.reduce<Record<string, typeof learned>>((acc, item) => {
+function toMarkdown(items: LearnedPhrase[]) {
+  const groups = items.reduce<Record<string, LearnedPhrase[]>>((acc, item) => {
     (acc[item.topic] ??= []).push(item);
     return acc;
   }, {});
@@ -19,7 +19,10 @@ function toMarkdown(items: typeof learned) {
     "# My Learnings\n",
     ...Object.entries(groups).map(([topic, phrases]) => [
       `## ${topic}`,
-      ...phrases.map((p) => `- **${p.phrase}** — ${p.translation}`),
+      ...phrases.map((p) => {
+        const reinforced = (p.times_seen ?? 1) > 1 ? ` _(enhanced)_` : "";
+        return `- **${p.phrase}** — ${p.translation}${reinforced}`;
+      }),
     ].join("\n")),
   ].join("\n\n");
 }
@@ -31,7 +34,11 @@ export default function LearningsPage() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem("learned_phrases");
-      if (raw) setLearned(JSON.parse(raw));
+      if (raw) {
+        const parsed: LearnedPhrase[] = JSON.parse(raw);
+        parsed.sort((a, b) => (b.times_seen ?? 1) - (a.times_seen ?? 1));
+        setLearned(parsed);
+      }
     } catch {
       // ignore corrupt data
     }
@@ -94,16 +101,24 @@ export default function LearningsPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {learned.map((item) => (
-              <Card key={item.phrase} className="shadow-none border-transparent bg-secondary/50">
+            {learned.map((item, idx) => (
+              <Card key={`${item.phrase}-${idx}`} className="shadow-none border-transparent bg-secondary/50">
                 <CardContent className="flex items-center justify-between p-5">
                   <div className="space-y-0.5">
                     <p className="font-heading font-bold text-lg text-foreground">{item.phrase}</p>
                     <p className="text-sm text-muted-foreground">{item.translation}</p>
                   </div>
-                  <Badge variant="secondary" className="shrink-0 ml-4 text-[10px] font-bold uppercase tracking-widest border-none rounded-full">
-                    {item.topic}
-                  </Badge>
+                  <div className="flex items-center gap-2 shrink-0 ml-4">
+                    {(item.times_seen ?? 1) > 1 && (
+                      <Badge variant="outline" className="text-[10px] font-bold uppercase tracking-widest rounded-full gap-1 text-green-600 border-green-600/30">
+                        <Check className="h-3 w-3" />
+                        Enhanced
+                      </Badge>
+                    )}
+                    <Badge variant="secondary" className="text-[10px] font-bold uppercase tracking-widest border-none rounded-full">
+                      {item.topic}
+                    </Badge>
+                  </div>
                 </CardContent>
               </Card>
             ))}

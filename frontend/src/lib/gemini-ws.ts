@@ -22,7 +22,7 @@ interface GeminiWsConfig {
 
 interface TokenResponse {
   token: string;
-  expires_at: string;
+  auth_type?: "key" | "token";
   system_prompt: string;
   model: string;
 }
@@ -70,8 +70,11 @@ export class GeminiWsClient {
       return;
     }
 
-    // 2. Open WebSocket directly to Gemini using the ephemeral token
-    const wsUrl = `wss://${GEMINI_HOST}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?access_token=${tokenData.token}`;
+    // 2. Open WebSocket directly to Gemini
+    const authParam = tokenData.auth_type === "key"
+      ? `key=${tokenData.token}`
+      : `access_token=${tokenData.token}`;
+    const wsUrl = `wss://${GEMINI_HOST}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?${authParam}`;
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
@@ -121,6 +124,8 @@ export class GeminiWsClient {
       // Setup complete — signal onOpen now (after handshake, not on WS open)
       if (data.setupComplete !== undefined) {
         this.config.onOpen?.();
+        // Prompt the tutor to speak first
+        this.sendText("Hello! Please greet me and start today's lesson.");
         return;
       }
 
@@ -169,8 +174,14 @@ export class GeminiWsClient {
       }
     };
 
-    this.ws.onclose = (event) => this.config.onClose?.(event);
-    this.ws.onerror = (event) => this.config.onError?.(event);
+    this.ws.onclose = (event) => {
+      console.warn("Gemini WS closed:", event.code, event.reason);
+      this.config.onClose?.(event);
+    };
+    this.ws.onerror = (event) => {
+      console.error("Gemini WS error:", event);
+      this.config.onError?.(event);
+    };
   }
 
   /** Send a PCM Int16 audio chunk to Gemini. */
@@ -179,10 +190,10 @@ export class GeminiWsClient {
     this.ws.send(
       JSON.stringify({
         realtimeInput: {
-          mediaChunks: [{
+          audio: {
             mimeType: "audio/pcm;rate=16000",
             data: arrayBufferToBase64(data),
-          }],
+          },
         },
       })
     );

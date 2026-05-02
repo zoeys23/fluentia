@@ -33,6 +33,42 @@
 - All interactive elements: `44×44pt` minimum touch target
 - Status indicators: color + icon/shape combo (never color alone)
 
+
+---
+
+## 3. Screen Detail
+
+### Onboarding States
+- Plan generation loading: "Fluencia is making your plan..." typing indicator while LLM call runs
+- Blank user input: Fluencia gently reprompts, no error state
+- Plan generation failure: "Let me try again..." with retry, no user-visible error
+- Abandoned mid-chat: on next visit, resume conversation from last message (do not restart)
+
+### Plan Page States
+- Loading: skeleton screen (tutor name + streak placeholder)
+- Empty (0 topics): "Fluencia is still learning about you — start your first session!"
+- Fetch error: "Couldn't load your plan. Retry?"
+- Async update in progress post-session: show last-known values, re-fetch on mount
+- All topics done: "You've completed your plan — Fluencia will discover what's next in your next session"
+
+**Topic suggest input states:**
+- Idle: placeholder "Suggest a topic to Fluencia..."
+- Pending: Fluencia typing indicator
+- Success: plan topics update in place
+- Error: "Fluencia couldn't update the plan. Try again?"
+
+### Session States
+- VAD loading: "Getting Fluencia ready..." — blocks session start until ONNX model loaded
+- Reconnecting: conversation feed dimmed, mic input blocked, spinner on persona pill
+- ElevenLabs fallback to `speechSynthesis`: toast "Using basic voice — dialect may differ"; speed slider stays functional (maps to `speechSynthesis.rate`)
+- Session < 2 min at end: "Too short — try for at least 2 minutes" — no summary shown
+- Encouragement toast: bottom of screen above mic, auto-dismiss 4s, fade in/out only
+
+### Summary States
+- Extraction failure: show transcript + "Fluencia will review this session later"
+- 0 phrases extracted: "No phrases captured this session" + full transcript below
+- MongoDB write failed: "Summary saved locally — will sync when you're back online"
+
 ---
 
 ## UI Screens
@@ -143,41 +179,6 @@
 
 ---
 
-## 3. Screen Detail
-
-### Onboarding States
-- Plan generation loading: "Fluencia is making your plan..." typing indicator while LLM call runs
-- Blank user input: Fluencia gently reprompts, no error state
-- Plan generation failure: "Let me try again..." with retry, no user-visible error
-- Abandoned mid-chat: on next visit, resume conversation from last message (do not restart)
-
-### Plan Page States
-- Loading: skeleton screen (tutor name + streak placeholder)
-- Empty (0 topics): "Fluencia is still learning about you — start your first session!"
-- Fetch error: "Couldn't load your plan. Retry?"
-- Async update in progress post-session: show last-known values, re-fetch on mount
-- All topics done: "You've completed your plan — Fluencia will discover what's next in your next session"
-
-**Topic suggest input states:**
-- Idle: placeholder "Suggest a topic to Fluencia..."
-- Pending: Fluencia typing indicator
-- Success: plan topics update in place
-- Error: "Fluencia couldn't update the plan. Try again?"
-
-### Session States
-- VAD loading: "Getting Fluencia ready..." — blocks session start until ONNX model loaded
-- Reconnecting: conversation feed dimmed, mic input blocked, spinner on persona pill
-- ElevenLabs fallback to `speechSynthesis`: toast "Using basic voice — dialect may differ"; speed slider stays functional (maps to `speechSynthesis.rate`)
-- Session < 2 min at end: "Too short — try for at least 2 minutes" — no summary shown
-- Encouragement toast: bottom of screen above mic, auto-dismiss 4s, fade in/out only
-
-### Summary States
-- Extraction failure: show transcript + "Fluencia will review this session later"
-- 0 phrases extracted: "No phrases captured this session" + full transcript below
-- MongoDB write failed: "Summary saved locally — will sync when you're back online"
-
----
-
 ## 4. Motion & Accessibility
 
 - **Motion:** Fade in/out only for toasts (4s auto-dismiss, positioned above mic)
@@ -279,54 +280,3 @@ System prompt includes:
 - Speed/patience instructions
 
 Encouragement triggers are updated at session end by the key-phrase extraction call. New wins appended; stale ones removed.
-
----
-
-## 8. Notion Export Format
-
-```markdown
-## Fluencia Session — 2026-05-02
-**Tutor:** Fluencia · Castilian Spanish · 15 min
-
-### Key Phrases
-| Spanish | English | Note |
-|---------|---------|------|
-| sin embargo | however / nevertheless | ✨ First used naturally |
-| ¡Qué guay! | How cool! | 🇪🇸 Madrid slang |
-| pues, bueno… | well, um… | 📈 Improving |
-
-### Fluencia's Note
-"You held your ground when I threw the unexpected question..."
-
-### Plan Update
-Next topic: Subjunctive mood (discovered by Fluencia)
-```
-
-Notion API: append to a page specified by the user from Plan page settings (or auto-created in their workspace).
-
----
-
-## 12. Error Handling
-
-| Error | Handling |
-|-------|----------|
-| Mic permission denied | "Fluencia needs mic access to practice speaking. [Allow in browser settings]" — blocks session start |
-| COOP/COEP headers missing | WASM AudioWorklet fails — "Session setup failed. Please reload." — blocks session start |
-| VAD ONNX model loading | "Getting Fluencia ready..." loading state until model ready — blocks mic capture |
-| VAD fires during TTS | Mute VAD inputs while TTS audio is playing — prevent feedback loop |
-| Empty transcript (noise) | Discard; no LLM call fired |
-| Gemini Live disconnect | Auto-reconnect up to 3× with exponential backoff; "Reconnecting…" in UI; flush utterances buffer to localStorage; retry MongoDB write on reconnect |
-| Realtime token expiry mid-session | Pre-check TTL at session start; refresh if < 5 min remaining before starting a turn |
-| ElevenLabs timeout (>3s) | Fall back to `speechSynthesis`; speed slider maps to `speechSynthesis.rate` (0.5–1.5); warning toast |
-| ElevenLabs speed out of range | Clamp before API call; log warning |
-| MongoDB write failure (session end) | Render summary from in-memory state immediately. Retry 3× async; if all fail, store to localStorage and show "Saved locally — syncing..." on next Plan page load |
-| Key phrase extraction (bad JSON) | Strip markdown fences, retry parse; if still invalid, skip vocabulary update, render raw utterances, log to Vercel |
-| Rate limit on onboarding API | Return 429 with "Too many requests — try again in a moment" |
-
----
-
-## 13. Streak Definition
-
-A streak increments when a session of **at least 5 minutes** is completed on a calendar day (user's local timezone). Streak resets to 0 if a day is missed. Displayed on Plan page header and 7-day dot row.
-
-Streak is computed server-side using stored user timezone.

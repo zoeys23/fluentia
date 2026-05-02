@@ -134,6 +134,22 @@ async def append_onboarding_message(session_id: str, role: str, content: str) ->
     )
 
 
+async def list_by_user(user_id: str, limit: int = 50) -> list[dict]:
+    """Return sessions for a user, most recent first."""
+    db = await get_db()
+    cursor = db.sessions.find(
+        {"user_id": user_id, "utterances.0": {"$exists": True}},
+        {
+            "session_id": 1,
+            "created_at": 1,
+            "summary": 1,
+            "utterances": {"$slice": -1},
+            "_id": 0,
+        },
+    ).sort("created_at", -1).limit(limit)
+    return await cursor.to_list()
+
+
 async def get_onboarding_messages(session_id: str) -> list[dict]:
     """Return the onboarding_messages array for a session."""
     doc = await get(session_id)

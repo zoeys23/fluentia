@@ -43,18 +43,27 @@ export default function SummaryPage() {
       try {
         const parsed: SessionSummary = JSON.parse(raw);
         setSummary(parsed);
-        // Accumulate key phrases into persistent learnings store
+        // Accumulate key phrases into persistent learnings store (deduplicated)
         if (parsed.key_phrases?.length) {
-          const existing = JSON.parse(localStorage.getItem("learned_phrases") ?? "[]");
-          const merged = [
-            ...existing,
-            ...parsed.key_phrases.map((kp) => ({
-              phrase: kp.target,
-              translation: kp.native,
-              topic: parsed.session_meta.day_title || "Session",
-            })),
-          ];
-          localStorage.setItem("learned_phrases", JSON.stringify(merged));
+          const existing: Array<{ phrase: string; translation: string; topic: string; times_seen: number }> =
+            JSON.parse(localStorage.getItem("learned_phrases") ?? "[]");
+          const byPhrase = new Map(existing.map((e) => [e.phrase, e]));
+
+          for (const kp of parsed.key_phrases) {
+            const prev = byPhrase.get(kp.target);
+            if (prev) {
+              prev.times_seen = (prev.times_seen || 1) + 1;
+            } else {
+              byPhrase.set(kp.target, {
+                phrase: kp.target,
+                translation: kp.native,
+                topic: parsed.session_meta.day_title || "Session",
+                times_seen: 1,
+              });
+            }
+          }
+
+          localStorage.setItem("learned_phrases", JSON.stringify([...byPhrase.values()]));
         }
       } catch {
         router.replace("/plan");

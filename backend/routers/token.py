@@ -78,7 +78,7 @@ async def get_token(
     week: int = Query(default=1, ge=1, le=2),
     day: int = Query(default=1, ge=1, le=7),
 ):
-    """Mint a short-lived ephemeral token for a direct browser → Gemini Live connection."""
+    """Return API key + session config for a direct browser → Gemini Live connection."""
     await sessions.get_or_create(session_id)
 
     # session_id doubles as user_id (no auth layer for hackathon)
@@ -87,25 +87,9 @@ async def get_token(
     system_prompt = _build_system_prompt(session, week, day, memory)
     logger.debug(f"Token system prompt for {session_id} w{week}d{day}:\n{system_prompt}")
 
-    client = genai.Client(
-        api_key=GEMINI_API_KEY,
-        http_options={"api_version": "v1alpha"},
-    )
-
-    now = datetime.datetime.now(tz=datetime.timezone.utc)
-    expire_time = now + datetime.timedelta(minutes=30)
-
-    token = client.auth_tokens.create(
-        config=types.CreateAuthTokenConfig(
-            uses=1,
-            expire_time=expire_time,
-            new_session_expire_time=now + datetime.timedelta(minutes=1),
-        )
-    )
-
     return {
-        "token": token.name,
-        "expires_at": expire_time.isoformat(),
+        "token": GEMINI_API_KEY,
+        "auth_type": "key",
         "system_prompt": system_prompt,
         "model": f"models/{VOICE_MODEL}",
     }

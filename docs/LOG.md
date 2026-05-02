@@ -98,3 +98,159 @@ python main.py
 - **Reflection uses typed memory_type prefixes** (e.g., `vocabulary_mastered:hola`) — allows upsert-on-exact-match while keeping `search_memory` semantic
 - **TTL 30 days on sessions** — auto-prunes old session documents; long-term memories persist indefinitely
 - **`find_one_and_update` with `return_document=True`** for session get_or_create — atomic, idempotent
+
+---
+
+## Phase 2b — Learnings Deduplication & Practice Feedback Loop
+
+**Date:** 2026-05-02
+
+### Problem
+
+The summary page blindly appended every session's `key_phrases` into `localStorage["learned_phrases"]`. Result: duplicate entries (same phrase from multiple sessions) caused React key collisions and a cluttered learnings page. No signal was fed back to the tutor about what the user already knew well.
+
+### What changed
+
+#### Frontend — Deduplication & "Enhanced" indicator
+
+| File | Change |
+|------|--------|
+| `frontend/src/app/summary/page.tsx` | Replaced naive array concat with a `Map`-based merge. Same phrase → increment `times_seen` counter instead of adding a duplicate |
+| `frontend/src/app/(tabs)/learnings/page.tsx` | Sort by `times_seen` desc. Phrases seen 2+ times show a green "Enhanced" badge. Markdown export annotates enhanced items |
+
+**localStorage shape after change:**
+```json
+[
+  { "phrase": "No te preocupes", "translation": "Don't worry", "topic": "Travel Basics", "times_seen": 3 },
+  { "phrase": "improvisar", "translation": "to improvise", "topic": "Conversations", "times_seen": 1 }
+]
+```
+
+#### Backend — Practice focus memories
+
+| File | Change |
+|------|--------|
+| `backend/services/reflection.py` | Added `_get_vocab_count()` helper to parse existing seen-count from MongoDB. After categorising phrases as new vs enhanced, writes two guidance memory slots |
+
+**New memory types written by reflection:**
+
+| memory_type | When | Content tells tutor to... |
+|---|---|---|
+| `practice_focus:new_phrases` | Phrase seen for the first time | Create opportunities for the user to use these in conversation |
+| `practice_focus:enhanced_phrases` | Phrase seen 2+ times | Stop drilling these; propose synonyms, alternative expressions, or more advanced variations instead |
+
+### Updated data flow
+
+```
+Session end:
+  → reflect()
+    → for each key_phrase:
+        _get_vocab_count() → recall existing memory → parse "(seen Nx)"
+        remember(vocabulary_mastered:{phrase}, "phrase = translation (seen {N+1}x)")
+    → categorise: new (count=1) vs enhanced (count≥2)
+    → remember(practice_focus:new_phrases, "...")
+    → remember(practice_focus:enhanced_phrases, "...")
+
+Next session start:
+  GET /api/token → build_memory_context()
+    → tutor sees:
+      "- practice_focus: Recently learnt phrases to practice more: hacer transbordo..."
+      "- practice_focus: Already well-practiced (enhanced) phrases: No te preocupes. Do NOT drill these again..."
+```
+
+### Design decisions
+
+- **Dedup in localStorage, not backend** — the learnings page is a client-side view; backend memories serve the tutor, not the UI
+- **Two memory slots, not per-phrase** — keeps the tutor prompt concise; `practice_focus:new_phrases` is overwritten each session with the latest set
+- **"Enhanced" not "Mastered"** — phrase appeared multiple times but we can't confirm true mastery; the label signals progress without overstating it
+- **Tutor proposes alternatives** — prevents stale repetition while building related vocabulary around concepts the user already grasps
+
+---
+
+## Phase 2c — Memory Compaction & Tiered Prompt Budget
+
+**Date:** 2026-05-02
+
+### Problem
+
+After many sessions, the `memories` collection accumulates dozens of slots per user: individual `vocabulary_mastered:*` entries, session notes, struggles, practice focus directives. All of these are dumped into the tutor system prompt via `build_memory_context()`, leading to prompt bloat that wastes tokens and dilutes the tutor's focus.
+
+### Strategy (3 MongoDB patterns combined)
+
+| Pattern | Application |
+|---------|-------------|
+| **Archive** | Phrases practiced 3+ times ("grasped") are moved from `memories` → `memories_archive` via batch insert + delete. Tutor never sees them again — they've served their purpose |
+| **Computed** | End-of-week (day 7): all individual `session_note:w{N}d{D}` entries are consolidated into a single `weekly_digest:w{N}` memory. Granular notes are archived |
+| **Tiered retrieval** | `build_memory_context` sorts by priority tier and caps at 12 lines. New material always beats old history |
+
+### Priority tiers (prompt inclusion order)
+
+| Tier | memory_type prefix | Rationale |
+|------|-------------------|-----------|
+| 0 (always) | `practice_focus` | Direct tutor behaviour instructions: what to drill, what to skip |
+| 1 (high) | `vocabulary_mastered` (1-2x) | Actively being learnt — tutor should weave these into conversation |
+| 2 (medium) | `recurring_struggle` | Patterns to watch for and gently correct |
+| 3 (medium) | `topic_interest` | Organic interests to incorporate when natural |
+| 4 (low) | `weekly_digest` | Compressed history for continuity — only included if budget allows |
+| 5 (omitted by cap) | `session_note` | Replaced by digest; only exists between sessions within a week |
+| — (archived) | `vocabulary_mastered` (3x+) | Graduated out; lives in `memories_archive` only |
+
+### What was built
+
+| File | Purpose |
+|------|---------|
+| `backend/services/compaction.py` | New. `graduate_grasped_phrases()` — archives 3x+ vocab. `compact_weekly_digest()` — merges session notes into one digest. `run_compaction()` — orchestrator called after reflection |
+| `backend/services/memory.py` | Rewritten. Tiered sort with `_TIER_ORDER` map, capped at `MAX_MEMORY_LINES = 12` |
+| `backend/routers/session.py` | Added `run_compaction()` call after `reflect()` in `/api/session/{id}/end` |
+| `backend/db/indexes.py` | Added `memories_archive` collection creation + indexes (`user_id+tenant_id+memory_type`, `archived_at`) |
+
+### Data flow
+
+```
+Session end (POST /api/session/{id}/end):
+  → generate_summary()
+  → reflect()              # writes vocabulary_mastered, practice_focus, etc.
+  → run_compaction()
+      → graduate_grasped_phrases()
+          if vocabulary_mastered:{phrase} has (seen 3x+):
+            insert into memories_archive (with archived_at timestamp)
+            delete from memories
+            delete needs_reinforcement:{phrase}
+      → compact_weekly_digest() [only on day == 7]
+          gather all session_note:w{N}d* entries
+          build digest string: "Week N completed: D1 title; D2 title; ... Grasped: phrase1, phrase2"
+          remember(weekly_digest:w{N}, digest)
+          archive individual session_note entries
+
+Next session start (GET /api/token):
+  → build_memory_context()
+      list_memories() → sort by tier → cap at 12 lines
+      Tutor sees (example with 6 active memories):
+        - [practice_focus] Recently learnt phrases to practice more: hacer transbordo...
+        - [practice_focus] Already well-practiced phrases: No te preocupes. Propose alternatives...
+        - [vocabulary_mastered] Me gusta = I like (seen 2x)
+        - [recurring_struggle] Confuses ser/estar in location contexts
+        - [topic_interest] Slang — user keeps asking about informal register
+        - [weekly_digest] Week 1 completed: Greetings; Travel; Food. Grasped: hola, gracias, por favor
+```
+
+### MongoDB collections after compaction
+
+```
+memories (active — what the tutor sees):
+  { user_id, memory_type: "practice_focus:new_phrases", content: "...", embedding, updated_at }
+  { user_id, memory_type: "vocabulary_mastered:hacer transbordo", content: "... (seen 1x)", ... }
+  { user_id, memory_type: "weekly_digest:w1", content: "Week 1 completed: ...", ... }
+
+memories_archive (cold storage — queryable but never in prompt):
+  { user_id, memory_type: "vocabulary_mastered:hola", content: "... (seen 5x)", archived_at }
+  { user_id, memory_type: "session_note:w1d3", content: "Week 1 Day 3 — ...", archived_at }
+```
+
+### Key decisions
+
+- **3x threshold for graduation** — conservative enough that the phrase was truly practiced across multiple sessions, not just mentioned once in three summaries
+- **Cap at 12 lines, not token-count** — simpler to implement; each line averages ~30 tokens → ~360 tokens total, well within budget for a system prompt section
+- **Archive, don't delete** — graduated vocabulary can still be queried for progress tracking, export, or "what did I learn?" features without polluting the active prompt
+- **Weekly digest only on day 7** — avoids partial-week summaries; if user skips days, notes accumulate until the week actually ends
+- **Compaction is non-blocking** — failures are logged but don't break the session end response
